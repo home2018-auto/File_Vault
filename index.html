@@ -1626,11 +1626,21 @@ function renderSyncBox(){
   box.innerHTML =
     '🌐 ইন্টারনেট: <b>' + (online ? 'আছে' : 'নেই') + '</b> · নেটওয়ার্ক: <b>' + netLabel(online ? netType() : 'none') + '</b><br>' +
     '⏳ সিঙ্কের অপেক্ষায় ডাটা: <b>' + (syncQueue.length ? syncQueue.length + 'টি' : 'নেই') + '</b><br>' +
-    '📴 অফলাইন মোড: <b>' + (sw ? 'প্রস্তুত (অ্যাপ অফলাইনেও খুলবে)' : 'ডাটা জমা হবে; অ্যাপ খুলতে ইন্টারনেট লাগতে পারে') + '</b><br>' +
+    '📴 অফলাইন মোড: <b>' + '<span id="offReady">যাচাই হচ্ছে...</span>' + '</b><br>' +
     '💾 স্থায়ী স্টোরেজ: <b id="persistState">...</b>';
   if(navigator.storage && navigator.storage.persisted){
     navigator.storage.persisted().then(p=>{ const e = document.getElementById('persistState'); if(e) e.textContent = p ? 'অনুমোদিত' : 'এখনো অনুমোদিত নয়'; });
   } else { const e = document.getElementById('persistState'); if(e) e.textContent = 'সাপোর্ট নেই'; }
+  checkOfflineReady();
+}
+async function checkOfflineReady(){
+  const e = document.getElementById('offReady'); if(!e) return;
+  let cached = false;
+  try{ if('caches' in window) cached = !!(await caches.match('./index.html')); }catch(err){}
+  const ctl = ('serviceWorker' in navigator && navigator.serviceWorker.controller);
+  e.textContent = (cached && ctl) ? '✅ প্রস্তুত — ইন্টারনেট ছাড়াই অ্যাপ খুলবে ও ডাটা এন্ট্রি চলবে'
+    : (ctl ? '⏳ ফাইল জমা হচ্ছে — একবার পেজ রিলোড করুন'
+    : '⚠️ এখনো প্রস্তুত নয় — ইন্টারনেট চালু রেখে পেজ একবার রিলোড করুন (GitHub-এ sw.js আছে কিনা দেখুন)');
 }
 
 /* কোনো রেকর্ড যোগ/বদল/ডিলিট হলে সেটা সারিতে জমা হয় — অনলাইনে ও অনুমোদিত নেটওয়ার্কে
@@ -3364,14 +3374,7 @@ document.getElementById('appDlBtn').addEventListener('click', ()=>{
     background_color:'#ffffff', theme_color: settings.iconColor || APP_DEF.iconColor,
     icons:[ { src:'icon-192.png', sizes:'192x192', type:'image/png', purpose:'any' }, { src:'icon-512.png', sizes:'512x512', type:'image/png', purpose:'any' }, { src:'icon-192.png', sizes:'192x192', type:'image/png', purpose:'maskable' }, { src:'icon-512.png', sizes:'512x512', type:'image/png', purpose:'maskable' } ] };
   manifest.id = './index.html'; manifest.lang = 'bn'; manifest.dir = 'ltr'; manifest.prefer_related_applications = false;
-  const sw = [
-    "const CACHE='fv-shell-v1';",
-    "const ASSETS=['./','./index.html','./manifest.webmanifest','./icon-192.png','./icon-512.png'];",
-    "self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).catch(()=>{}));self.skipWaiting();});",
-    "self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))));self.clients.claim();});",
-    "self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;const u=new URL(e.request.url);if(u.origin!==location.origin)return;",
-    "e.respondWith(fetch(e.request).then(r=>{const cp=r.clone();caches.open(CACHE).then(c=>c.put(e.request,cp));return r;}).catch(()=>caches.match(e.request).then(m=>m||caches.match('./index.html'))));});"
-  ].join('\n');
+  const sw = ["const CACHE = 'fv-shell-v2';", "const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];", "", "self.addEventListener('install', e => {", "  e.waitUntil((async () => {", "    const c = await caches.open(CACHE);", "    await Promise.all(ASSETS.map(async a => {", "      try { const r = await fetch(a, { cache: 'reload' }); if (r && r.ok) await c.put(a, r); } catch (err) {}", "    }));", "    await self.skipWaiting();", "  })());", "});", "", "self.addEventListener('activate', e => {", "  e.waitUntil((async () => {", "    const ks = await caches.keys();", "    await Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)));", "    await self.clients.claim();", "  })());", "});", "", "self.addEventListener('fetch', e => {", "  const req = e.request;", "  if (req.method !== 'GET') return;", "  const u = new URL(req.url);", "  if (u.origin !== location.origin) return;", "", "  // পেজ খোলা: ইন্টারনেট থাকলে নতুনটা (এবং কপি সেভ), না থাকলে বা ধীর হলে সেভ করা কপি", "  if (req.mode === 'navigate') {", "    e.respondWith((async () => {", "      const c = await caches.open(CACHE);", "      try {", "        const r = await Promise.race([fetch(req), new Promise((_, rej) => setTimeout(() => rej(new Error('slow')), 4000))]);", "        if (r && r.ok) c.put('./index.html', r.clone());", "        return r;", "      } catch (err) {", "        return (await c.match('./index.html')) || (await c.match('./')) || Response.error();", "      }", "    })());", "    return;", "  }", "", "  // আইকন/manifest ইত্যাদি: সেভ করা কপি আগে, পেছনে নতুন করে আনা", "  e.respondWith((async () => {", "    const c = await caches.open(CACHE);", "    const hit = await c.match(req, { ignoreSearch: true });", "    const net = fetch(req).then(r => { if (r && r.ok) c.put(req, r.clone()); return r; }).catch(() => null);", "    return hit || (await net) || Response.error();", "  })());", "});"].join('\n');
   const jobs = [
     ()=>downloadBlob('manifest.webmanifest', new Blob([JSON.stringify(manifest, null, 2)], { type:'application/manifest+json' })),
     ()=>downloadBlob('sw.js', new Blob([sw], { type:'text/javascript' })),
